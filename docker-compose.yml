@@ -1,0 +1,525 @@
+# This names the Docker Compose project so containers and networks have predictable names.
+name: hotel-management-system
+
+# This section defines every container that belongs to the application stack.
+services:
+  # This service runs PostgreSQL and stores relational data for all business services.
+  postgres:
+    # This image provides PostgreSQL 16 in a small Alpine-based container.
+    image: postgres:16-alpine
+    # This gives the database container a stable readable name.
+    container_name: hotel-postgres
+    # This restarts the database unless it is explicitly stopped.
+    restart: unless-stopped
+    # These environment variables configure the PostgreSQL server on first startup.
+    environment:
+      # This creates the main PostgreSQL administrator username.
+      POSTGRES_USER: hotel_admin
+      # This sets the PostgreSQL administrator password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hotel_admin}
+      # This sets the default database that PostgreSQL itself connects to during initialization.
+      POSTGRES_DB: postgres
+      # This custom variable is used by the mounted init script to create one database per microservice.
+      POSTGRES_MULTIPLE_DATABASES: hotel_db,booking_db,payment_db,user_db,notification_db,inventory_db
+    # These ports expose PostgreSQL to the host machine for local debugging tools.
+    ports:
+      # This maps host port 5432 to container port 5432.
+      - "5432:5432"
+    # These volumes keep database data persistent and run the startup initialization script.
+    volumes:
+      # This named volume stores PostgreSQL data outside the container filesystem.
+      - postgres-data:/var/lib/postgresql/data
+      # This mounts the initialization script that creates separate databases for each service.
+      - ./docker/postgres/init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh:ro
+    # This health check waits until PostgreSQL is ready to accept connections.
+    healthcheck:
+      # This command uses pg_isready to verify that the database is up.
+      test: ["CMD-SHELL", "pg_isready -U hotel_admin -d postgres"]
+      # This runs the health check every 10 seconds.
+      interval: 10s
+      # This allows the check to run for up to 5 seconds before marking that attempt failed.
+      timeout: 5s
+      # This retries the health check up to 10 times before marking the container unhealthy.
+      retries: 10
+    # This attaches PostgreSQL to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service runs RabbitMQ so services can exchange messages asynchronously.
+  rabbitmq:
+    # This image includes RabbitMQ plus the management UI.
+    image: rabbitmq:3-management
+    # This gives the broker container a stable readable name.
+    container_name: hotel-rabbitmq
+    # This restarts the broker unless it is explicitly stopped.
+    restart: unless-stopped
+    # These environment variables create a custom RabbitMQ user that other containers can access.
+    environment:
+      # This sets the broker username.
+      RABBITMQ_DEFAULT_USER: hotelmq
+      # This sets the broker password.
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-hotelmq123}
+    # These ports expose AMQP traffic and the RabbitMQ management UI to the host.
+    ports:
+      # This maps host port 5672 to the RabbitMQ AMQP port.
+      - "5672:5672"
+      # This maps host port 15672 to the RabbitMQ management dashboard.
+      - "15672:15672"
+    # This named volume keeps RabbitMQ queues and broker metadata persistent.
+    volumes:
+      # This stores RabbitMQ data outside the container filesystem.
+      - rabbitmq-data:/var/lib/rabbitmq
+    # This health check waits until the broker is ready.
+    healthcheck:
+      # This command asks RabbitMQ for a basic readiness status.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      # This runs the health check every 10 seconds.
+      interval: 10s
+      # This allows each check 5 seconds to complete.
+      timeout: 5s
+      # This retries the health check up to 10 times before marking the container unhealthy.
+      retries: 10
+    # This attaches RabbitMQ to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service runs Eureka so microservices can register themselves and discover each other.
+  service-discovery:
+    # This builds the service-discovery Docker image from its local Dockerfile.
+    build:
+      # This points Docker Compose to the service folder that contains the Dockerfile and built jar.
+      context: ./service-discovery
+    # This gives the Eureka container a stable readable name.
+    container_name: service-discovery
+    # This restarts the service unless it is explicitly stopped.
+    restart: unless-stopped
+    # This exposes the Eureka dashboard and registry API to the host machine.
+    ports:
+      # This maps host port 8761 to container port 8761.
+      - "8761:8761"
+    # This health check waits until the Eureka health endpoint reports UP.
+    healthcheck:
+      # This command reads the actuator health response and checks for UP status.
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8761/actuator/health | grep -q '\"status\":\"UP\"'"]
+      # This runs the health check every 10 seconds.
+      interval: 10s
+      # This allows each check 5 seconds to finish.
+      timeout: 5s
+      # This retries the health check up to 20 times before marking the container unhealthy.
+      retries: 20
+      # This gives Eureka extra time to start before counting failures.
+      start_period: 20s
+    # This attaches the service to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service serves centralized Spring configuration files to the other services.
+  config-server:
+    # This builds the config-server Docker image from its local Dockerfile.
+    build:
+      # This points Docker Compose to the config-server folder.
+      context: ./config-server
+    # This gives the config-server container a stable readable name.
+    container_name: config-server
+    # This restarts the service unless it is explicitly stopped.
+    restart: unless-stopped
+    # This starts config-server after Eureka has started.
+    depends_on:
+      # This dependency ensures service-discovery starts first.
+      service-discovery:
+        # This waits until Eureka is healthy before starting config-server.
+        condition: service_healthy
+    # These environment variables point config-server at Eureka.
+    environment:
+      # This sets the Eureka default zone for the config-server container.
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-discovery:8761/eureka
+    # This exposes the Spring Cloud Config port to the host machine.
+    ports:
+      # This maps host port 8888 to container port 8888.
+      - "8888:8888"
+    # This health check waits until the Config Server health endpoint reports UP.
+    healthcheck:
+      # This command reads the actuator health response and checks for UP status.
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8888/actuator/health | grep -q '\"status\":\"UP\"'"]
+      # This runs the health check every 10 seconds.
+      interval: 10s
+      # This allows each check 5 seconds to finish.
+      timeout: 5s
+      # This retries the health check up to 20 times before marking the container unhealthy.
+      retries: 20
+      # This gives Config Server extra time to start before counting failures.
+      start_period: 20s
+    # This attaches the service to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service is the single HTTP entry point for clients calling the platform.
+  api-gateway:
+    # This builds the API Gateway image from its local Dockerfile.
+    build:
+      # This points Docker Compose to the api-gateway folder.
+      context: ./api-gateway
+    # This gives the gateway container a stable readable name.
+    container_name: api-gateway
+    # This restarts the service unless it is explicitly stopped.
+    restart: unless-stopped
+    # These dependencies start required infrastructure before the gateway.
+    depends_on:
+      # This starts Eureka before the gateway.
+      service-discovery:
+        # This waits until Eureka is healthy.
+        condition: service_healthy
+      # This starts config-server before the gateway.
+      config-server:
+        # This waits until Config Server is healthy.
+        condition: service_healthy
+    # These environment variables override localhost-based configuration for Docker networking.
+    environment:
+      # This tells the gateway where config-server is reachable inside Docker.
+      SPRING_CONFIG_IMPORT: configserver:http://config-server:8888
+      # This tells the gateway where Eureka is reachable inside Docker.
+      EUREKA_SERVER_URL: http://service-discovery:8761/eureka
+    # This exposes the main client-facing gateway port.
+    ports:
+      # This maps host port 8080 to container port 8080.
+      - "8080:8080"
+    # This attaches the service to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service manages hotel-related data.
+  hotel-service:
+    # This builds the hotel-service image from its local Dockerfile.
+    build:
+      # This points Docker Compose to the hotel-service folder.
+      context: ./hotel-service
+    # This gives the hotel-service container a stable readable name.
+    container_name: hotel-service
+    # This restarts the service unless it is explicitly stopped.
+    restart: unless-stopped
+    # These dependencies start required infrastructure before hotel-service.
+    depends_on:
+      # This starts PostgreSQL before hotel-service.
+      postgres:
+        # This waits until PostgreSQL is healthy.
+        condition: service_healthy
+      # This starts Eureka before hotel-service.
+      service-discovery:
+        # This waits until Eureka is healthy.
+        condition: service_healthy
+      # This starts config-server before hotel-service.
+      config-server:
+        # This waits until Config Server is healthy.
+        condition: service_healthy
+    # These environment variables replace localhost settings with Docker service names.
+    environment:
+      # This tells hotel-service where config-server is reachable inside Docker.
+      SPRING_CONFIG_IMPORT: configserver:http://config-server:8888
+      # This tells hotel-service where Eureka is reachable inside Docker.
+      EUREKA_SERVER_URL: http://service-discovery:8761/eureka
+      # This points hotel-service to its PostgreSQL database.
+      HOTEL_DB_URL: jdbc:postgresql://postgres:5432/hotel_db
+      # This sets the PostgreSQL username for hotel-service.
+      HOTEL_DB_USERNAME: hotel_admin
+      # This sets the PostgreSQL password for hotel-service.
+      HOTEL_DB_PASSWORD: hotel_admin
+      # This selects the PostgreSQL JDBC driver instead of the H2 default.
+      HOTEL_DB_DRIVER: org.postgresql.Driver
+    # This exposes the hotel-service HTTP port.
+    ports:
+      # This maps host port 8081 to container port 8081.
+      - "8081:8081"
+    # This attaches the service to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service creates bookings and coordinates user, inventory, and payment calls.
+  booking-service:
+    # This builds the booking-service image from its local Dockerfile.
+    build:
+      # This points Docker Compose to the booking-service folder.
+      context: ./booking-service
+    # This gives the booking-service container a stable readable name.
+    container_name: booking-service
+    # This restarts the service unless it is explicitly stopped.
+    restart: unless-stopped
+    # These dependencies start required infrastructure before booking-service.
+    depends_on:
+      # This starts PostgreSQL before booking-service.
+      postgres:
+        # This waits until PostgreSQL is healthy.
+        condition: service_healthy
+      # This starts RabbitMQ before booking-service.
+      rabbitmq:
+        # This waits until RabbitMQ is healthy.
+        condition: service_healthy
+      # This starts Eureka before booking-service.
+      service-discovery:
+        # This waits until Eureka is healthy.
+        condition: service_healthy
+      # This starts config-server before booking-service.
+      config-server:
+        # This waits until Config Server is healthy.
+        condition: service_healthy
+    # These environment variables replace localhost settings with Docker service names.
+    environment:
+      # This tells booking-service where config-server is reachable inside Docker.
+      SPRING_CONFIG_IMPORT: configserver:http://config-server:8888
+      # This tells booking-service where Eureka is reachable inside Docker.
+      EUREKA_SERVER_URL: http://service-discovery:8761/eureka
+      # This points booking-service to its PostgreSQL database.
+      BOOKING_DB_URL: jdbc:postgresql://postgres:5432/booking_db
+      # This sets the PostgreSQL username for booking-service.
+      BOOKING_DB_USERNAME: hotel_admin
+      # This sets the PostgreSQL password for booking-service.
+      BOOKING_DB_PASSWORD: hotel_admin
+      # This selects the PostgreSQL JDBC driver instead of the H2 default.
+      BOOKING_DB_DRIVER: org.postgresql.Driver
+      # This tells booking-service how to connect to RabbitMQ inside Docker.
+      RABBITMQ_HOST: rabbitmq
+      # This tells booking-service which RabbitMQ port to use.
+      RABBITMQ_PORT: 5672
+      # This tells booking-service which RabbitMQ username to use.
+      RABBITMQ_USERNAME: hotelmq
+      # This tells booking-service which RabbitMQ password to use.
+      RABBITMQ_PASSWORD: hotelmq123
+    # This exposes the booking-service HTTP port.
+    ports:
+      # This maps host port 8082 to container port 8082.
+      - "8082:8082"
+    # This attaches the service to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service handles payment processing logic.
+  payment-service:
+    # This builds the payment-service image from its local Dockerfile.
+    build:
+      # This points Docker Compose to the payment-service folder.
+      context: ./payment-service
+    # This gives the payment-service container a stable readable name.
+    container_name: payment-service
+    # This restarts the service unless it is explicitly stopped.
+    restart: unless-stopped
+    # These dependencies start required infrastructure before payment-service.
+    depends_on:
+      # This starts PostgreSQL before payment-service.
+      postgres:
+        # This waits until PostgreSQL is healthy.
+        condition: service_healthy
+      # This starts RabbitMQ before payment-service.
+      rabbitmq:
+        # This waits until RabbitMQ is healthy.
+        condition: service_healthy
+      # This starts Eureka before payment-service.
+      service-discovery:
+        # This waits until Eureka is healthy.
+        condition: service_healthy
+      # This starts config-server before payment-service.
+      config-server:
+        # This waits until Config Server is healthy.
+        condition: service_healthy
+    # These environment variables replace localhost settings with Docker service names.
+    environment:
+      # This tells payment-service where config-server is reachable inside Docker.
+      SPRING_CONFIG_IMPORT: configserver:http://config-server:8888
+      # This tells payment-service where Eureka is reachable inside Docker.
+      EUREKA_SERVER_URL: http://service-discovery:8761/eureka
+      # This points payment-service to its PostgreSQL database.
+      PAYMENT_DB_URL: jdbc:postgresql://postgres:5432/payment_db
+      # This sets the PostgreSQL username for payment-service.
+      PAYMENT_DB_USERNAME: hotel_admin
+      # This sets the PostgreSQL password for payment-service.
+      PAYMENT_DB_PASSWORD: hotel_admin
+      # This selects the PostgreSQL JDBC driver instead of the H2 default.
+      PAYMENT_DB_DRIVER: org.postgresql.Driver
+      # This tells payment-service how to connect to RabbitMQ inside Docker.
+      RABBITMQ_HOST: rabbitmq
+      # This tells payment-service which RabbitMQ port to use.
+      RABBITMQ_PORT: 5672
+      # This tells payment-service which RabbitMQ username to use.
+      RABBITMQ_USERNAME: hotelmq
+      # This tells payment-service which RabbitMQ password to use.
+      RABBITMQ_PASSWORD: hotelmq123
+    # This exposes the payment-service HTTP port.
+    ports:
+      # This maps host port 8083 to container port 8083.
+      - "8083:8083"
+    # This attaches the service to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service manages user-related data.
+  user-service:
+    # This builds the user-service image from its local Dockerfile.
+    build:
+      # This points Docker Compose to the user-service folder.
+      context: ./user-service
+    # This gives the user-service container a stable readable name.
+    container_name: user-service
+    # This restarts the service unless it is explicitly stopped.
+    restart: unless-stopped
+    # These dependencies start required infrastructure before user-service.
+    depends_on:
+      # This starts PostgreSQL before user-service.
+      postgres:
+        # This waits until PostgreSQL is healthy.
+        condition: service_healthy
+      # This starts Eureka before user-service.
+      service-discovery:
+        # This waits until Eureka is healthy.
+        condition: service_healthy
+      # This starts config-server before user-service.
+      config-server:
+        # This waits until Config Server is healthy.
+        condition: service_healthy
+    # These environment variables replace localhost settings with Docker service names.
+    environment:
+      # This tells user-service where config-server is reachable inside Docker.
+      SPRING_CONFIG_IMPORT: configserver:http://config-server:8888
+      # This tells user-service where Eureka is reachable inside Docker.
+      EUREKA_SERVER_URL: http://service-discovery:8761/eureka
+      # This points user-service to its PostgreSQL database.
+      USER_DB_URL: jdbc:postgresql://postgres:5432/user_db
+      # This sets the PostgreSQL username for user-service.
+      USER_DB_USERNAME: hotel_admin
+      # This sets the PostgreSQL password for user-service.
+      USER_DB_PASSWORD: hotel_admin
+      # This selects the PostgreSQL JDBC driver instead of the H2 default.
+      USER_DB_DRIVER: org.postgresql.Driver
+    # This exposes the user-service HTTP port.
+    ports:
+      # This maps host port 8084 to container port 8084.
+      - "8084:8084"
+    # This attaches the service to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service consumes booking and payment events and handles notifications.
+  notification-service:
+    # This builds the notification-service image from its local Dockerfile.
+    build:
+      # This points Docker Compose to the notification-service folder.
+      context: ./notification-service
+    # This gives the notification-service container a stable readable name.
+    container_name: notification-service
+    # This restarts the service unless it is explicitly stopped.
+    restart: unless-stopped
+    # These dependencies start required infrastructure before notification-service.
+    depends_on:
+      # This starts PostgreSQL before notification-service.
+      postgres:
+        # This waits until PostgreSQL is healthy.
+        condition: service_healthy
+      # This starts RabbitMQ before notification-service.
+      rabbitmq:
+        # This waits until RabbitMQ is healthy.
+        condition: service_healthy
+      # This starts Eureka before notification-service.
+      service-discovery:
+        # This waits until Eureka is healthy.
+        condition: service_healthy
+      # This starts config-server before notification-service.
+      config-server:
+        # This waits until Config Server is healthy.
+        condition: service_healthy
+    # These environment variables replace localhost settings with Docker service names.
+    environment:
+      # This tells notification-service where config-server is reachable inside Docker.
+      SPRING_CONFIG_IMPORT: configserver:http://config-server:8888
+      # This tells notification-service where Eureka is reachable inside Docker.
+      EUREKA_SERVER_URL: http://service-discovery:8761/eureka
+      # This points notification-service to its PostgreSQL database.
+      NOTIFICATION_DB_URL: jdbc:postgresql://postgres:5432/notification_db
+      # This sets the PostgreSQL username for notification-service.
+      NOTIFICATION_DB_USERNAME: hotel_admin
+      # This sets the PostgreSQL password for notification-service.
+      NOTIFICATION_DB_PASSWORD: hotel_admin
+      # This selects the PostgreSQL JDBC driver instead of the H2 default.
+      NOTIFICATION_DB_DRIVER: org.postgresql.Driver
+      # This tells notification-service how to connect to RabbitMQ inside Docker.
+      RABBITMQ_HOST: rabbitmq
+      # This tells notification-service which RabbitMQ port to use.
+      RABBITMQ_PORT: 5672
+      # This tells notification-service which RabbitMQ username to use.
+      RABBITMQ_USERNAME: hotelmq
+      # This tells notification-service which RabbitMQ password to use.
+      RABBITMQ_PASSWORD: hotelmq123
+    # This exposes the notification-service HTTP port.
+    ports:
+      # This maps host port 8085 to container port 8085.
+      - "8085:8085"
+    # This attaches the service to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service manages room inventory and availability.
+  inventory-service:
+    # This builds the inventory-service image from its local Dockerfile.
+    build:
+      # This points Docker Compose to the inventory-service folder.
+      context: ./inventory-service
+    # This gives the inventory-service container a stable readable name.
+    container_name: inventory-service
+    # This restarts the service unless it is explicitly stopped.
+    restart: unless-stopped
+    # These dependencies start required infrastructure before inventory-service.
+    depends_on:
+      # This starts PostgreSQL before inventory-service.
+      postgres:
+        # This waits until PostgreSQL is healthy.
+        condition: service_healthy
+      # This starts Eureka before inventory-service.
+      service-discovery:
+        # This waits until Eureka is healthy.
+        condition: service_healthy
+      # This starts config-server before inventory-service.
+      config-server:
+        # This waits until Config Server is healthy.
+        condition: service_healthy
+    # These environment variables replace localhost settings with Docker service names.
+    environment:
+      # This tells inventory-service where config-server is reachable inside Docker.
+      SPRING_CONFIG_IMPORT: configserver:http://config-server:8888
+      # This tells inventory-service where Eureka is reachable inside Docker.
+      EUREKA_SERVER_URL: http://service-discovery:8761/eureka
+      # This points inventory-service to its PostgreSQL database.
+      INVENTORY_DB_URL: jdbc:postgresql://postgres:5432/inventory_db
+      # This sets the PostgreSQL username for inventory-service.
+      INVENTORY_DB_USERNAME: hotel_admin
+      # This sets the PostgreSQL password for inventory-service.
+      INVENTORY_DB_PASSWORD: hotel_admin
+      # This selects the PostgreSQL JDBC driver instead of the H2 default.
+      INVENTORY_DB_DRIVER: org.postgresql.Driver
+    # This exposes the inventory-service HTTP port.
+    ports:
+      # This maps host port 8086 to container port 8086.
+      - "8086:8086"
+    # This attaches the service to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+# This section defines reusable Docker volumes.
+volumes:
+  # This stores PostgreSQL data persistently.
+  postgres-data:
+  # This stores RabbitMQ data persistently.
+  rabbitmq-data:
+
+# This section defines custom Docker networks used by the application.
+networks:
+  # This creates a dedicated bridge network for service-to-service communication.
+  hotel-network:
+    # This explicitly chooses the standard bridge network driver.
+    driver: bridge

@@ -1,0 +1,39 @@
+server:
+  port: 8082
+
+spring:
+  datasource:
+    url: ${BOOKING_DB_URL:jdbc:h2:mem:bookingdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE}
+    username: ${BOOKING_DB_USERNAME:sa}
+    password: ${BOOKING_DB_PASSWORD:}
+    driver-class-name: ${BOOKING_DB_DRIVER:org.h2.Driver}
+  h2:
+    console:
+      enabled: true
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      paymentService:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+      inventoryService:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+      userService:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+
+app:
+  messaging:
+    booking-exchange: booking.exchange
+    booking-created-routing-key: booking.created
+    booking-created-queue: booking.queue
+

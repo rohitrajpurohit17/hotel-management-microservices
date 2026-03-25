@@ -1,0 +1,59 @@
+spring:
+  # This sets the service name that Eureka, Config Server, and other Spring Cloud components will use.
+  application:
+    # The booking service keeps its original Spring application name.
+    name: booking-service
+  # This tells Spring Boot to try loading shared configuration from the config server.
+  config:
+    # The config server import is optional so local startup still works if the config server is offline.
+    import: optional:configserver:http://localhost:8888
+
+# Resilience4j configuration starts here.
+resilience4j:
+  # Circuit breaker settings live under this section.
+  circuitbreaker:
+    # Each named circuit breaker instance is configured under instances.
+    instances:
+      # This instance name must exactly match the @CircuitBreaker name used in BookingService.
+      paymentServiceCircuitBreaker:
+        # Expose this circuit breaker in Actuator health output.
+        registerHealthIndicator: true
+        # COUNT_BASED means Resilience4j evaluates the last N calls instead of a time period.
+        slidingWindowType: COUNT_BASED
+        # Look at the most recent 5 payment calls when calculating failures.
+        slidingWindowSize: 5
+        # Wait until at least 3 calls happen before deciding whether the service is unhealthy.
+        minimumNumberOfCalls: 3
+        # Open the circuit when 50 percent or more of the tracked calls fail.
+        failureRateThreshold: 50
+        # Keep the circuit OPEN for 20 seconds before testing the payment service again.
+        waitDurationInOpenState: 20s
+        # When moving to HALF_OPEN, allow 2 trial calls to check whether the payment service recovered.
+        permittedNumberOfCallsInHalfOpenState: 2
+        # Automatically move from OPEN to HALF_OPEN after the wait duration passes.
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+
+# Actuator settings expose circuit breaker health and events for debugging and monitoring.
+management:
+  # Health indicator settings live here.
+  health:
+    # Enable health reporting for circuit breakers.
+    circuitbreakers:
+      # This makes the circuit breaker state visible in the health endpoint.
+      enabled: true
+  # Endpoint exposure settings live here.
+  endpoints:
+    # Configure web exposure for Actuator endpoints.
+    web:
+      # List the Actuator endpoints that should be available over HTTP.
+      exposure:
+        # Expose general health/info plus dedicated circuit breaker endpoints.
+        include: health,info,circuitbreakers,circuitbreakerevents
+
+eureka:
+  # These are Eureka client settings for the booking service.
+  client:
+    # This tells the service where the Eureka registry is running inside Docker.
+    service-url:
+      # The service-discovery hostname must be used inside the Docker network instead of localhost.
+      defaultZone: http://service-discovery:8761/eureka

@@ -1,0 +1,120 @@
+# This block contains server-level settings for the API Gateway application.
+server:
+  # This is the HTTP port where the API Gateway listens for incoming requests.
+  port: 8080
+
+# This block contains Spring Boot and Spring Cloud configuration.
+spring:
+  # This block defines the logical application identity.
+  application:
+    # This name is used by Config Server and becomes API-GATEWAY when registered in Eureka.
+    name: api-gateway
+  # This block configures the core Spring Boot application behavior.
+  main:
+    # Spring Cloud Gateway is a reactive application, so it must run on WebFlux.
+    web-application-type: reactive
+  # This block contains Spring Cloud features such as Gateway.
+  cloud:
+    # This block contains Spring Cloud Gateway settings.
+    gateway:
+      # This block uses the current non-deprecated Spring Cloud Gateway WebFlux property names.
+      server:
+        # This block contains settings specific to the WebFlux Gateway runtime.
+        webflux:
+          # This block enables Gateway integration with service discovery.
+          discovery:
+            # This block controls the Discovery Locator feature.
+            locator:
+              # This is the current equivalent of spring.cloud.gateway.discovery.locator.enabled=true.
+              enabled: true
+              # This is the current equivalent of spring.cloud.gateway.discovery.locator.lower-case-service-id=true.
+              lower-case-service-id: true
+          # These filters run for every request that passes through the Gateway.
+          default-filters:
+            # This removes duplicate CORS headers when both Gateway and a downstream service add them.
+            - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin
+          # These are the explicit business routes exposed by the API Gateway.
+          routes:
+            # This route forwards booking requests to the BOOKING-SERVICE instances from Eureka.
+            - id: booking-service-route
+              # The lb:// prefix tells Gateway to use Spring Cloud LoadBalancer with Eureka.
+              uri: lb://BOOKING-SERVICE
+              # These predicates decide which URLs should use this route.
+              predicates:
+                # This matches both /api/bookings and any nested booking path such as /api/bookings/123.
+                - Path=/api/bookings,/api/bookings/**
+            # This route forwards hotel requests to the HOTEL-SERVICE instances from Eureka.
+            - id: hotel-service-route
+              # The service name must match the Eureka registration name exactly.
+              uri: lb://HOTEL-SERVICE
+              # These predicates decide which URLs should use this route.
+              predicates:
+                # This matches both /api/hotels and any nested hotel path such as /api/hotels/5.
+                - Path=/api/hotels,/api/hotels/**
+            # This route forwards payment requests to the PAYMENT-SERVICE instances from Eureka.
+            - id: payment-service-route
+              # The service name must match the Eureka registration name exactly.
+              uri: lb://PAYMENT-SERVICE
+              # These predicates decide which URLs should use this route.
+              predicates:
+                # This matches both /api/payments and any nested payment path such as /api/payments/status.
+                - Path=/api/payments,/api/payments/**
+            # This route forwards user requests to the USER-SERVICE instances from Eureka.
+            - id: user-service-route
+              # The service name must match the Eureka registration name exactly.
+              uri: lb://USER-SERVICE
+              # These predicates decide which URLs should use this route.
+              predicates:
+                # This matches both /api/users and any nested user path such as /api/users/7.
+                - Path=/api/users,/api/users/**
+            # This route forwards notification requests to the NOTIFICATION-SERVICE instances from Eureka.
+            - id: notification-service-route
+              # The service name must match the Eureka registration name exactly.
+              uri: lb://NOTIFICATION-SERVICE
+              # These predicates decide which URLs should use this route.
+              predicates:
+                # This matches both /api/notifications and any nested notification path.
+                - Path=/api/notifications,/api/notifications/**
+            # This route forwards inventory requests to the INVENTORY-SERVICE instances from Eureka.
+            - id: inventory-service-route
+              # The service name must match the Eureka registration name exactly.
+              uri: lb://INVENTORY-SERVICE
+              # These predicates decide which URLs should use this route.
+              predicates:
+                # This matches both /api/inventory and any nested inventory path.
+                - Path=/api/inventory,/api/inventory/**
+
+# This block configures how the Gateway talks to Eureka.
+eureka:
+  # This block contains Eureka client settings.
+  client:
+    # This tells the Gateway where the Eureka server is running inside the Docker network.
+    service-url:
+      # Docker containers must use the Compose service name instead of localhost.
+      defaultZone: http://service-discovery:8761/eureka
+    # This tells the Gateway to register itself with Eureka.
+    register-with-eureka: true
+    # This tells the Gateway to download the service registry from Eureka.
+    fetch-registry: true
+    # This shortens how often the Gateway refreshes the service list so routes recover faster after startup.
+    registry-fetch-interval-seconds: 5
+  # This block contains Eureka instance registration settings.
+  instance:
+    # This makes the Gateway register with its container IP address.
+    prefer-ip-address: true
+
+# This block configures Spring Boot Actuator endpoints for health and route debugging.
+management:
+  # This block selects which Actuator endpoints are exposed over HTTP.
+  endpoints:
+    # This block configures web exposure for Actuator.
+    web:
+      # This list exposes health, info, Prometheus metrics, and Gateway route details.
+      exposure:
+        include: health,info,prometheus,gateway
+  # This block configures individual Actuator endpoints.
+  endpoint:
+    # This block configures the health endpoint.
+    health:
+      # This shows full health details, which helps during debugging.
+      show-details: always
