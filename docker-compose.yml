@@ -183,6 +183,9 @@ services:
       SPRING_CONFIG_IMPORT: configserver:http://config-server:8888
       # This tells the gateway where Eureka is reachable inside Docker.
       EUREKA_SERVER_URL: http://service-discovery:8761/eureka
+      # This sets the log file path for centralized logging.
+      # Logs are written to a shared volume that Promtail can collect.
+      LOG_FILE_NAME: /var/log/hotel-services/api-gateway.log
     # This exposes the main client-facing gateway port.
     ports:
       # This maps host port 8080 to container port 8080.
@@ -230,6 +233,9 @@ services:
       HOTEL_DB_PASSWORD: hotel_admin
       # This selects the PostgreSQL JDBC driver instead of the H2 default.
       HOTEL_DB_DRIVER: org.postgresql.Driver
+      # This sets the log file path for centralized logging.
+      # Logs are written to a shared volume that Promtail can collect.
+      LOG_FILE_NAME: /var/log/hotel-services/hotel-service.log
     # This exposes the hotel-service HTTP port.
     ports:
       # This maps host port 8081 to container port 8081.
@@ -289,6 +295,9 @@ services:
       RABBITMQ_USERNAME: hotelmq
       # This tells booking-service which RabbitMQ password to use.
       RABBITMQ_PASSWORD: hotelmq123
+      # This sets the log file path for centralized logging.
+      # Logs are written to a shared volume that Promtail can collect.
+      LOG_FILE_NAME: /var/log/hotel-services/booking-service.log
     # This exposes the booking-service HTTP port.
     ports:
       # This maps host port 8082 to container port 8082.
@@ -348,6 +357,9 @@ services:
       RABBITMQ_USERNAME: hotelmq
       # This tells payment-service which RabbitMQ password to use.
       RABBITMQ_PASSWORD: hotelmq123
+      # This sets the log file path for centralized logging.
+      # Logs are written to a shared volume that Promtail can collect.
+      LOG_FILE_NAME: /var/log/hotel-services/payment-service.log
     # This exposes the payment-service HTTP port.
     ports:
       # This maps host port 8083 to container port 8083.
@@ -395,6 +407,9 @@ services:
       USER_DB_PASSWORD: hotel_admin
       # This selects the PostgreSQL JDBC driver instead of the H2 default.
       USER_DB_DRIVER: org.postgresql.Driver
+      # This sets the log file path for centralized logging.
+      # Logs are written to a shared volume that Promtail can collect.
+      LOG_FILE_NAME: /var/log/hotel-services/user-service.log
     # This exposes the user-service HTTP port.
     ports:
       # This maps host port 8084 to container port 8084.
@@ -454,6 +469,9 @@ services:
       RABBITMQ_USERNAME: hotelmq
       # This tells notification-service which RabbitMQ password to use.
       RABBITMQ_PASSWORD: hotelmq123
+      # This sets the log file path for centralized logging.
+      # Logs are written to a shared volume that Promtail can collect.
+      LOG_FILE_NAME: /var/log/hotel-services/notification-service.log
     # This exposes the notification-service HTTP port.
     ports:
       # This maps host port 8085 to container port 8085.
@@ -501,11 +519,115 @@ services:
       INVENTORY_DB_PASSWORD: hotel_admin
       # This selects the PostgreSQL JDBC driver instead of the H2 default.
       INVENTORY_DB_DRIVER: org.postgresql.Driver
+      # This sets the log file path for centralized logging.
+      # Logs are written to a shared volume that Promtail can collect.
+      LOG_FILE_NAME: /var/log/hotel-services/inventory-service.log
     # This exposes the inventory-service HTTP port.
     ports:
       # This maps host port 8086 to container port 8086.
       - "8086:8086"
     # This attaches the service to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service runs Zipkin for distributed tracing.
+  # Distributed tracing helps track requests as they flow through multiple microservices.
+  # It shows the path of a request, timing, and any errors across services.
+  # This is useful for debugging performance issues and understanding service interactions.
+  zipkin:
+    # This uses the official Zipkin Docker image.
+    image: openzipkin/zipkin:latest
+    # This gives the Zipkin container a stable readable name.
+    container_name: hotel-zipkin
+    # This restarts Zipkin unless it is explicitly stopped.
+    restart: unless-stopped
+    # These ports expose Zipkin UI and API to the host.
+    ports:
+      # This maps host port 9411 to Zipkin's default port.
+      - "9411:9411"
+    # This attaches Zipkin to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service runs Loki for log aggregation.
+  # Centralized logging collects logs from all services in one place.
+  # This makes it easy to search and analyze logs across the entire system.
+  # It's important for monitoring, debugging, and understanding system behavior.
+  loki:
+    # This uses the official Loki Docker image.
+    image: grafana/loki:latest
+    # This gives the Loki container a stable readable name.
+    container_name: hotel-loki
+    # This restarts Loki unless it is explicitly stopped.
+    restart: unless-stopped
+    # These ports expose Loki API to the host.
+    ports:
+      # This maps host port 3100 to Loki's default port.
+      - "3100:3100"
+    # This volume mounts the Loki configuration.
+    volumes:
+      # This mounts the local Loki config file into the container.
+      - ./kubernetes/monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml
+    # This command tells Loki to use the mounted config file.
+    command: -config.file=/etc/loki/local-config.yaml
+    # This attaches Loki to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service runs Promtail to collect logs from services and send to Loki.
+  # Promtail reads log files from each service and forwards them to Loki.
+  # This enables centralized log collection without services needing to send logs directly.
+  promtail:
+    # This uses the official Promtail Docker image.
+    image: grafana/promtail:latest
+    # This gives the Promtail container a stable readable name.
+    container_name: hotel-promtail
+    # This restarts Promtail unless it is explicitly stopped.
+    restart: unless-stopped
+    # This volume mounts the Promtail configuration and log directories.
+    volumes:
+      # This mounts the local Promtail config file.
+      - ./kubernetes/monitoring/promtail/promtail-config.yml:/etc/promtail/config.yml
+      # This mounts the logs directory from each service for log collection.
+      - ./logs:/var/log/hotel-services
+    # This command tells Promtail to use the mounted config file.
+    command: -config.file=/etc/promtail/config.yml
+    # This attaches Promtail to the shared application network.
+    networks:
+      # This uses the custom bridge network defined at the bottom of the file.
+      - hotel-network
+
+  # This service runs Grafana for log visualization and dashboards.
+  # Grafana provides a web UI to view logs collected by Loki.
+  # It allows creating dashboards to monitor system health and performance.
+  # Users can query logs and create alerts based on log patterns.
+  grafana:
+    # This uses the official Grafana Docker image.
+    image: grafana/grafana:latest
+    # This gives the Grafana container a stable readable name.
+    container_name: hotel-grafana
+    # This restarts Grafana unless it is explicitly stopped.
+    restart: unless-stopped
+    # These environment variables configure Grafana.
+    environment:
+      # This sets the admin username.
+      GF_SECURITY_ADMIN_USER: admin
+      # This sets the admin password.
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    # These ports expose Grafana UI to the host.
+    ports:
+      # This maps host port 3000 to Grafana's default port.
+      - "3000:3000"
+    # This volume mounts Grafana data and provisioning.
+    volumes:
+      # This mounts the local Grafana provisioning directory.
+      - ./kubernetes/monitoring/grafana/provisioning:/etc/grafana/provisioning
+      # This mounts the local Grafana dashboards directory.
+      - ./kubernetes/monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    # This attaches Grafana to the shared application network.
     networks:
       # This uses the custom bridge network defined at the bottom of the file.
       - hotel-network

@@ -25,15 +25,28 @@ management:
     health:
       show-details: always
   tracing:
+    # This enables distributed tracing with 100% sampling (every request is traced).
+    # Distributed tracing tracks requests across multiple services, showing the full path, timing, and errors.
+    # This helps debug issues in microservices architecture where requests span multiple services.
     sampling:
       probability: 1.0
   zipkin:
+    # This configures the Zipkin server endpoint for sending trace data.
+    # Zipkin collects and visualizes traces from all services.
+    # In Docker, services use http://zipkin:9411/api/v2/spans; locally use http://localhost:9411/api/v2/spans.
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 logging:
+  # This configures file logging for centralized log collection.
+  # Logs are written to files that can be collected by Promtail and sent to Loki.
+  # This enables searching and analyzing logs across all services in one place.
   file:
-    name: ${LOG_FILE_NAME:}
+    name: ${LOG_FILE_NAME:logs/${spring.application.name}.log}
   pattern:
+    # This logging pattern includes the service name, trace ID, and span ID.
+    # Service name helps identify which microservice generated the log.
+    # Trace ID and span ID link logs to specific requests across services.
+    # This makes it easy to track a request's journey through the system.
     level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"
 

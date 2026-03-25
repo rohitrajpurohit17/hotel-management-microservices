@@ -9,6 +9,14 @@ spring:
   application:
     # This name is used by Config Server and becomes API-GATEWAY when registered in Eureka.
     name: api-gateway
+  # This block imports external configuration from Config Server.
+  # Config Server provides centralized configuration management for all microservices.
+  # It allows us to externalize configuration like ports, database settings, and common properties.
+  # This makes it easy to change settings without rebuilding the application.
+  # The 'optional:' prefix means the service can start even if Config Server is unavailable.
+  # In Docker, Config Server is at http://config-server:8888, locally at http://localhost:8888.
+  config:
+    import: optional:configserver:http://localhost:8888
   # This block configures the core Spring Boot application behavior.
   main:
     # Spring Cloud Gateway is a reactive application, so it must run on WebFlux.
